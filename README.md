@@ -25,13 +25,30 @@ To use this tool, you need to have Go installed on your machine. Visit [Go's off
 1. Clone the repository to your local machine.
 2. Navigate to the cloned directory and build the tool with Go:
 
-## Run in Manual Interactive Mode
 ```sh
 go build -o hcp-sizer
 ```
 
-3. Run the calculator `./hcp-sizer`
+### Run in Interactive Mode (Default)
+
+3. Run the calculator:
+
+```sh
+./hcp-sizer
+```
+
 4. Follow the interactive prompts to enter your cluster's specifications and choose the calculation method.
+
+### Run in Non-Interactive Mode
+
+If you want to run the tool non-interactively (useful for scripting), you must provide all required arguments via flags and disable interactive prompts:
+
+```sh
+./hcp-sizer --interactive=false --worker-cpus 8 --worker-memory 32 --max-pods 250 --pod-count 1000 --total-nodes 3
+```
+
+**IMPORTANT**: if any required argument is missing in non-interactive mode, the program will exit with an error.
+Interactive mode is enabled by default. To disable prompts, use `--interactive=false`.
 
 
 ## Run in Discovery Mode
@@ -43,7 +60,7 @@ To run the HCP Sizer in _discovery_ mode, use the -d or --discover flag when sta
 
 ```sh 
 ./hcp-sizer --discover
-````
+```
 
 Or, using the shorthand flag version:
     
