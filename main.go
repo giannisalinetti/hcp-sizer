@@ -137,75 +137,124 @@ func promptForSelection(promptLabel string, items []string) int {
 	return -1
 }
 
-var discoverMode bool
-
-func init() {
-	rootCmd.PersistentFlags().BoolVarP(&discoverMode, "discover", "d", false, "Run the application in discover mode")
-}
+var (
+	workerCPUs   float64
+	workerMemory float64
+	maxPods      float64
+	podCount     float64
+	totalNodes   float64
+	apiRate      float64
+	useLoadBased bool
+	interactive  bool
+	discoverMode bool
+)
 
 var rootCmd = &cobra.Command{
 	Use:   "hcp-sizer",
-	Short: "An HCP Sizing Calculator based on Science!",
-	Run: func(cmd *cobra.Command, args []string) {
-		resources := ServerResources{}
+	Short: "HCP Sizer is a tool to calculate HCP cluster sizing",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		// First, check if we're in non-interactive mode and validate required arguments
+		if !interactive {
+			hasRequiredArgs := workerCPUs > 0 && workerMemory > 0 && maxPods > 0 &&
+				podCount > 0 && totalNodes > 0 && (useLoadBased && apiRate > 0 || !useLoadBased)
+
+			if !hasRequiredArgs {
+				return fmt.Errorf("when not in interactive mode, all required arguments must be provided:\n" +
+					"  --worker-cpus\n" +
+					"  --worker-memory\n" +
+					"  --max-pods\n" +
+					"  --pod-count\n" +
+					"  --total-nodes\n" +
+					"  --load-based (optional)\n" +
+					"  --api-rate (required if --load-based is set)")
+			}
+		}
+
+		// If discover mode is enabled, use the discover function
 		if discoverMode {
 			clientset, err := InitializeKubernetesClientForExternalUse()
 			if err != nil {
-				fmt.Println("Failed to initialize Kubernetes client:", err)
-				os.Exit(1)
+				return fmt.Errorf("failed to initialize Kubernetes client: %v", err)
 			}
 
 			nodeResources, err := FetchClusterDataTwo(clientset)
 			if err != nil {
-				fmt.Println("Failed to fetch data from Kubernetes cluster:", err)
-				os.Exit(1)
+				return fmt.Errorf("failed to fetch cluster data: %v", err)
 			}
 
-			// for simplicity, let's pick the first node we see
-			resources.WorkerCPUs = nodeResources[0].CPU
-			resources.WorkerMemory = nodeResources[0].Memory
-			resources.MaxPods = float64(nodeResources[0].MaxPods)
-			resources.PodCount = promptForInput("Enter the number of pods you plan to run on your cluster (for ETCD storage calculation)")
-			resources.totalNodes = promptForInput("Enter the number nodes you plan to have in your hosting cluster")
-			resources.CalculationMethod = promptForSelection("Select Calculation Method", []string{"Request-Based", "Load-Based"})
-			resources.UseLoadBased = resources.CalculationMethod == 1
-		} else {
-			// add flag for command
-			resources.WorkerCPUs = promptForInput("Enter the number of vCPUs on the worker node")
-			resources.WorkerMemory = promptForInput("Enter the memory (in GiB) on the worker node")
-			resources.MaxPods = promptForInput("Enter the maximum number of pods on the worker node (usually 250 or 500)")
-			resources.PodCount = promptForInput("Enter the number of pods you plan to run on your cluster (for ETCD storage calculation)")
-			resources.totalNodes = promptForInput("Enter the number nodes you plan to have in your hosting cluster")
-			resources.CalculationMethod = promptForSelection("Select Calculation Method", []string{"Request-Based", "Load-Based"})
-			resources.UseLoadBased = resources.CalculationMethod == 1
-		}
-		// Check evaluation method, request-based or load-based (request is the more generic method)
-		// load-based is preferred when data about QPS is available (e.g. from an existing cluster)
-		if resources.UseLoadBased {
-			green := color.New(color.FgGreen)
-
-			italicGreen := green.Add(color.Italic)
-			italicGreen.Println("❗️Hint 1: Run the following query in an existing cluster to estimate your QPS:")
-			italicGreen.Println(`sum(rate(apiserver_request_total{namespace=~"clusters-$name*"}[2m])) by (namespace)`)
-			italicGreen.Println("❗Hint 2: Low: 0-1000 QPS, Medium: 1000-5000 QPS, High: 5000-10000 QPS, Very High: 10000-20000 QPS")
-
-			resources.APIRate = promptForInput("Enter the estimated API rate (QPS)")
+			// Use the discovered values from the first node
+			if len(nodeResources) > 0 {
+				workerCPUs = nodeResources[0].CPU
+				workerMemory = nodeResources[0].Memory
+				maxPods = float64(nodeResources[0].MaxPods)
+				// We can't discover podCount and totalNodes from the cluster
+				// These will need to be provided by the user
+			}
 		}
 
-		resources.MaxHCPs, resources.HCPlimit = calculateMaxHCPs(resources.WorkerCPUs, resources.WorkerMemory, resources.MaxPods, resources.APIRate, resources.UseLoadBased)
-		resources.EtcdStorage = calculateETCDStorage(resources.PodCount)
-		resources.totalHCPs = resources.totalNodes * math.Floor(resources.MaxHCPs)
+		// Only show prompts if explicitly in interactive mode
+		if interactive {
+			if workerCPUs == 0 {
+				workerCPUs = promptForInput("Enter worker node CPU cores")
+			}
+			if workerMemory == 0 {
+				workerMemory = promptForInput("Enter worker node memory (GB)")
+			}
+			if maxPods == 0 {
+				maxPods = promptForInput("Enter max pods per node")
+			}
+			if podCount == 0 {
+				podCount = promptForInput("Enter total number of pods")
+			}
+			if totalNodes == 0 {
+				totalNodes = promptForInput("Enter total number of nodes")
+			}
+			if !useLoadBased {
+				useLoadBased = promptForSelection("Use load-based calculation?", []string{"Yes", "No"}) == 0
+			}
+			if useLoadBased && apiRate == 0 {
+				apiRate = promptForInput("Enter API rate (requests per second)")
+			}
+		}
+
+		// Calculate and display results
+		serverResources := &ServerResources{
+			WorkerCPUs:   workerCPUs,
+			WorkerMemory: workerMemory,
+			MaxPods:      maxPods,
+			PodCount:     podCount,
+			totalNodes:   totalNodes,
+			UseLoadBased: useLoadBased,
+			APIRate:      apiRate,
+		}
+
+		serverResources.MaxHCPs, serverResources.HCPlimit = calculateMaxHCPs(serverResources.WorkerCPUs, serverResources.WorkerMemory, serverResources.MaxPods, serverResources.APIRate, serverResources.UseLoadBased)
+		serverResources.EtcdStorage = calculateETCDStorage(serverResources.PodCount)
+		serverResources.totalHCPs = serverResources.totalNodes * math.Floor(serverResources.MaxHCPs)
 
 		yellow := color.New(color.FgYellow)
-		italitYellow := yellow.Add(color.Italic)
+		italicYellow := yellow.Add(color.Italic)
 
 		// Print the results
-		italitYellow.Printf("Maximum HCPs that can be hosted per node: %.2f\n", math.Floor(resources.MaxHCPs))
-		italitYellow.Printf("Estimated HCPs that can be hosted in the hosting cluster: %.2f\n", math.Floor(resources.totalHCPs))
-		italitYellow.Printf("Estimated HCP ETCD Storage Requirement: %.3f GiB\n", resources.EtcdStorage)
-		italitYellow.Printf("Limiting Resource: %s\n", resources.HCPlimit)
+		italicYellow.Printf("Maximum HCPs that can be hosted per node: %.2f\n", math.Floor(serverResources.MaxHCPs))
+		italicYellow.Printf("Estimated HCPs that can be hosted in the hosting cluster: %.2f\n", math.Floor(serverResources.totalHCPs))
+		italicYellow.Printf("Estimated HCP ETCD Storage Requirement: %.3f GiB\n", serverResources.EtcdStorage)
+		italicYellow.Printf("Limiting Resource: %s\n", serverResources.HCPlimit)
 
+		return nil
 	},
+}
+
+func init() {
+	rootCmd.Flags().Float64Var(&workerCPUs, "worker-cpus", 0, "Number of CPU cores per worker node")
+	rootCmd.Flags().Float64Var(&workerMemory, "worker-memory", 0, "Memory in GB per worker node")
+	rootCmd.Flags().Float64Var(&maxPods, "max-pods", 0, "Maximum number of pods per node")
+	rootCmd.Flags().Float64Var(&podCount, "pod-count", 0, "Total number of pods in the cluster")
+	rootCmd.Flags().Float64Var(&totalNodes, "total-nodes", 0, "Total number of nodes in the cluster")
+	rootCmd.Flags().Float64Var(&apiRate, "api-rate", 0, "API rate in requests per second (required for load-based calculation)")
+	rootCmd.Flags().BoolVar(&useLoadBased, "load-based", false, "Use load-based calculation")
+	rootCmd.Flags().BoolVar(&interactive, "interactive", true, "Run in interactive mode and prompt for any missing values. If omitted or set to false (use --interactive=false), all required arguments must be provided via flags")
+	rootCmd.Flags().BoolVar(&discoverMode, "discover", false, "Discover cluster resources automatically")
 }
 
 func main() {
@@ -213,5 +262,4 @@ func main() {
 		fmt.Println(err)
 		os.Exit(1)
 	}
-
 }
