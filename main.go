@@ -253,8 +253,8 @@ func init() {
 	rootCmd.Flags().Float64Var(&totalNodes, "total-nodes", 0, "Total number of nodes in the cluster")
 	rootCmd.Flags().Float64Var(&apiRate, "api-rate", 0, "API rate in requests per second (required for load-based calculation)")
 	rootCmd.Flags().BoolVar(&useLoadBased, "load-based", false, "Use load-based calculation")
-	rootCmd.Flags().BoolVar(&interactive, "interactive", true, "Run in interactive mode and prompt for any missing values. If omitted or set to false (use --interactive=false), all required arguments must be provided via flags")
-	rootCmd.Flags().BoolVar(&discoverMode, "discover", false, "Discover cluster resources automatically")
+	rootCmd.Flags().BoolVarP(&interactive, "interactive", "i", true, "Run in interactive mode and prompt for any missing values. If omitted or set to false (use --interactive=false), all required arguments must be provided via flags")
+	rootCmd.Flags().BoolVarP(&discoverMode, "discover", "d", false, "Discover cluster resources automatically")
 }
 
 func main() {
